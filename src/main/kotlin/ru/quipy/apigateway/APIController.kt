@@ -6,6 +6,7 @@ import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.web.bind.annotation.*
 import ru.quipy.orders.repository.OrderRepository
 import ru.quipy.payments.logic.OrderPayer
+import ru.quipy.payments.metrics.PaymentMetrics
 import java.util.*
 
 @RestController
@@ -19,8 +20,12 @@ class APIController {
     @Autowired
     private lateinit var orderPayer: OrderPayer
 
+    @Autowired
+    private lateinit var metrics: PaymentMetrics
+
     @PostMapping("/users")
     fun createUser(@RequestBody req: CreateUserRequest): User {
+        metrics.incIncomingTotal(url = "/users")
         return User(UUID.randomUUID(), req.name)
     }
 
@@ -30,6 +35,7 @@ class APIController {
 
     @PostMapping("/orders")
     fun createOrder(@RequestParam userId: UUID, @RequestParam price: Int): Order {
+        metrics.incIncomingTotal(url = "/orders")
         val order = Order(
             UUID.randomUUID(),
             userId,
@@ -56,6 +62,7 @@ class APIController {
 
     @PostMapping("/orders/{orderId}/payment")
     fun payOrder(@PathVariable orderId: UUID, @RequestParam deadline: Long): PaymentSubmissionDto {
+        metrics.incIncomingTotal(url = "/orders/{orderId}/payment")
         val paymentId = UUID.randomUUID()
         val order = orderRepository.findById(orderId)?.let {
             orderRepository.save(it.copy(status = OrderStatus.PAYMENT_IN_PROGRESS))
