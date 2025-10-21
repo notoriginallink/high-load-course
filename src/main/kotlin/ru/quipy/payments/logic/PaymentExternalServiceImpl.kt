@@ -15,6 +15,8 @@ import ru.quipy.payments.metrics.PaymentMetrics
 import java.net.SocketTimeoutException
 import java.time.Duration
 import java.util.*
+import java.util.concurrent.TimeUnit
+import kotlin.time.toDuration
 
 
 // Advice: always treat time as a Duration
@@ -51,8 +53,6 @@ class PaymentExternalSystemAdapterImpl(
 
         val transactionId = UUID.randomUUID()
 
-        rateLimiter.tickBlocking()
-
         // Вне зависимости от исхода оплаты важно отметить что она была отправлена.
         // Это требуется сделать ВО ВСЕХ СЛУЧАЯХ, поскольку эта информация используется сервисом тестирования.
         paymentESService.update(paymentId) {
@@ -60,9 +60,24 @@ class PaymentExternalSystemAdapterImpl(
         }
 
         logger.info("[$accountName] Submit: $paymentId , txId: $transactionId")
+        if (now() + requestAverageProcessingTime.toMillis() > deadline) {
+            paymentESService.update(paymentId) {
+                it.logProcessing(success = false, now(), transactionId = transactionId, reason = "Deadline")
+            }
+            metrics.incTimeoutPayment(account = accountName)
+            return
+        }
 
         try {
-            ongoingWindow.tryAcquire(requestAverageProcessingTime)
+            val timeToWait = Duration.ofMillis(deadline - now() - requestAverageProcessingTime.toMillis())
+            if (!ongoingWindow.tryAcquire(timeToWait)) {
+                paymentESService.update(paymentId) {
+                    it.logProcessing(success = false, now(), transactionId = transactionId, reason = "Deadline")
+                }
+                metrics.incTimeoutPayment(account = accountName)
+                return
+            }
+            rateLimiter.tickBlocking()
 
             val request = Request.Builder().run {
                 url("http://$paymentProviderHostPort/external/process?serviceName=$serviceName&token=$token&accountName=$accountName&transactionId=$transactionId&paymentId=$paymentId&amount=$amount")
@@ -79,6 +94,7 @@ class PaymentExternalSystemAdapterImpl(
                     mapper.readValue(response.body?.string(), ExternalSysResponse::class.java)
                 } catch (e: Exception) {
                     logger.error("[$accountName] [ERROR] Payment processed for txId: $transactionId, payment: $paymentId, result code: ${response.code}, reason: ${response.body?.string()}")
+                    metrics.incFailedPayment(account = accountName)
                     ExternalSysResponse(transactionId.toString(), paymentId.toString(),false, e.message)
                 }
 
@@ -86,6 +102,7 @@ class PaymentExternalSystemAdapterImpl(
 
                 // Здесь мы обновляем состояние оплаты в зависимости от результата в базе данных оплат.
                 // Это требуется сделать ВО ВСЕХ ИСХОДАХ (успешная оплата / неуспешная / ошибочная ситуация)
+                if (body.result) metrics.incSuccessPayment(account = accountName) else metrics.incFailedPayment(account = accountName)
                 paymentESService.update(paymentId) {
                     it.logProcessing(body.result, now(), transactionId, reason = body.message)
                 }
@@ -99,6 +116,7 @@ class PaymentExternalSystemAdapterImpl(
                         responseDesc = HttpStatus.REQUEST_TIMEOUT.reasonPhrase,
                     )
                     logger.error("[$accountName] Payment timeout for txId: $transactionId, payment: $paymentId", e)
+                    metrics.incTimeoutPayment(account = accountName)
                     paymentESService.update(paymentId) {
                         it.logProcessing(false, now(), transactionId, reason = "Request timeout.")
                     }
@@ -106,7 +124,7 @@ class PaymentExternalSystemAdapterImpl(
 
                 else -> {
                     logger.error("[$accountName] Payment failed for txId: $transactionId, payment: $paymentId", e)
-
+                    metrics.incFailedPayment(account = accountName)
                     paymentESService.update(paymentId) {
                         it.logProcessing(false, now(), transactionId, reason = e.message)
                     }
