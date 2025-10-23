@@ -3,25 +3,30 @@ package ru.quipy.apigateway
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Autowired
+import org.springframework.http.HttpStatus
+import org.springframework.http.ResponseEntity
 import org.springframework.web.bind.annotation.*
+import ru.quipy.common.utils.SlidingWindowRateLimiter
 import ru.quipy.orders.repository.OrderRepository
 import ru.quipy.payments.logic.OrderPayer
+import ru.quipy.payments.logic.PaymentAccountProperties
 import ru.quipy.payments.metrics.PaymentMetrics
+import java.time.Duration
 import java.util.*
 
 @RestController
-class APIController {
+class APIController(
+    private val orderRepository: OrderRepository,
+    private val orderPayer: OrderPayer,
+    private val metrics: PaymentMetrics,
+    paymentAccountProperties: List<PaymentAccountProperties>,
+) {
 
-    val logger: Logger = LoggerFactory.getLogger(APIController::class.java)
-
-    @Autowired
-    private lateinit var orderRepository: OrderRepository
-
-    @Autowired
-    private lateinit var orderPayer: OrderPayer
-
-    @Autowired
-    private lateinit var metrics: PaymentMetrics
+    private val logger: Logger = LoggerFactory.getLogger(APIController::class.java)
+    private val paymentRateLimiter: SlidingWindowRateLimiter = SlidingWindowRateLimiter(
+        rate = paymentAccountProperties.maxOf(PaymentAccountProperties::rateLimitPerSec).toLong(),
+        window = Duration.ofSeconds(1),
+    )
 
     @PostMapping("/users")
     fun createUser(@RequestBody req: CreateUserRequest): User {
@@ -61,8 +66,13 @@ class APIController {
     }
 
     @PostMapping("/orders/{orderId}/payment")
-    fun payOrder(@PathVariable orderId: UUID, @RequestParam deadline: Long): PaymentSubmissionDto {
+    fun payOrder(@PathVariable orderId: UUID, @RequestParam deadline: Long): ResponseEntity<Any> {
         metrics.incIncomingTotal(url = "/orders/{orderId}/payment")
+        if (!paymentRateLimiter.tick()) {
+            return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
+                .body(mapOf("error" to "Rate limit exceeded", "retryAfter" to "1s"))
+        }
+
         val paymentId = UUID.randomUUID()
         val order = orderRepository.findById(orderId)?.let {
             orderRepository.save(it.copy(status = OrderStatus.PAYMENT_IN_PROGRESS))
@@ -71,7 +81,7 @@ class APIController {
 
 
         val createdAt = orderPayer.processPayment(orderId, order.price, paymentId, deadline)
-        return PaymentSubmissionDto(createdAt, paymentId)
+        return ResponseEntity.ok(PaymentSubmissionDto(createdAt, paymentId))
     }
 
     class PaymentSubmissionDto(

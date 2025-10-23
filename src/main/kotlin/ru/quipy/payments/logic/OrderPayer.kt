@@ -14,17 +14,12 @@ import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
 
 @Service
-class OrderPayer {
+class OrderPayer(
+    private val paymentESService: EventSourcingService<UUID, PaymentAggregate, PaymentAggregateState>,
+    private val paymentService: PaymentService,
+) {
 
-    companion object {
-        val logger: Logger = LoggerFactory.getLogger(OrderPayer::class.java)
-    }
-
-    @Autowired
-    private lateinit var paymentESService: EventSourcingService<UUID, PaymentAggregate, PaymentAggregateState>
-
-    @Autowired
-    private lateinit var paymentService: PaymentService
+    private val logger: Logger = LoggerFactory.getLogger(javaClass)
 
     private val paymentExecutor = ThreadPoolExecutor(
         16,
@@ -41,9 +36,9 @@ class OrderPayer {
         paymentExecutor.submit {
             val createdEvent = paymentESService.create {
                 it.create(
-                    paymentId,
-                    orderId,
-                    amount
+                    id = paymentId,
+                    orderId = orderId,
+                    amount = amount,
                 )
             }
             logger.trace("Payment ${createdEvent.paymentId} for order $orderId created.")
