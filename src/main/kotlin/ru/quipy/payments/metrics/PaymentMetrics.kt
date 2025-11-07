@@ -2,6 +2,7 @@ package ru.quipy.payments.metrics
 
 import io.micrometer.core.instrument.Counter
 import io.micrometer.core.instrument.MeterRegistry
+import org.springframework.http.HttpStatus
 import org.springframework.stereotype.Service
 
 @Service
@@ -14,10 +15,14 @@ class PaymentMetrics(
         const val TIMEOUT_PAYMENT_TAG = "timeout"
     }
 
-    fun incIncomingTotal(url: String) = Counter
+    fun incIncomingTotal(url: String, httpStatus: HttpStatus = HttpStatus.OK) = Counter
         .builder("incoming_http_requests")
         .description("Number of incoming requests")
-        .tags("url", url)
+        .tags(
+            "url", url,
+            "response_code", httpStatus.value().toString(),
+            "response_desc", httpStatus.reasonPhrase,
+        )
         .register(meterRegistry)
         .increment()
 
