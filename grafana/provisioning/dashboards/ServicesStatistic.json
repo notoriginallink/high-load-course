@@ -137,6 +137,100 @@
     },
     {
       "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "barWidthFactor": 0.6,
+            "drawStyle": "line",
+            "fillOpacity": 0,
+            "gradientMode": "none",
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "insertNulls": false,
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "showPoints": "auto",
+            "showValues": false,
+            "spanNulls": false,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": 0
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 9
+      },
+      "id": 105,
+      "options": {
+        "legend": {
+          "calcs": [],
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "hideZeros": false,
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "pluginVersion": "12.2.0",
+      "targets": [
+        {
+          "editorMode": "code",
+          "expr": "sum by (response_code) (rate(incoming_http_requests_total[$window]))",
+          "legendFormat": "{{response_code}} - {{response_desc}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Total Incoming RPS",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
         "uid": "PBFA97CFB590B2093"
       },
       "fieldConfig": {
@@ -199,7 +293,7 @@
         "h": 7,
         "w": 24,
         "x": 0,
-        "y": 9
+        "y": 17
       },
       "id": 106,
       "options": {
@@ -287,15 +381,40 @@
             ]
           }
         },
-        "overrides": []
+        "overrides": [
+          {
+            "__systemRef": "hideSeriesFrom",
+            "matcher": {
+              "id": "byNames",
+              "options": {
+                "mode": "exclude",
+                "names": [
+                  "200 - OK"
+                ],
+                "prefix": "All except:",
+                "readOnly": true
+              }
+            },
+            "properties": [
+              {
+                "id": "custom.hideFrom",
+                "value": {
+                  "legend": false,
+                  "tooltip": true,
+                  "viz": true
+                }
+              }
+            ]
+          }
+        ]
       },
       "gridPos": {
-        "h": 8,
-        "w": 24,
+        "h": 9,
+        "w": 11,
         "x": 0,
-        "y": 16
+        "y": 24
       },
-      "id": 105,
+      "id": 103,
       "options": {
         "legend": {
           "calcs": [],
@@ -313,13 +432,28 @@
       "targets": [
         {
           "editorMode": "code",
-          "expr": "sum by (response_code) (rate(incoming_http_requests_total[$window]))",
+          "exemplar": false,
+          "expr": "rate(payment_external_outgoing_http_requests_total[$window])",
+          "instant": false,
           "legendFormat": "{{response_code}} - {{response_desc}}",
           "range": true,
           "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "sum(rate(payment_external_outgoing_http_requests_total[$window]))",
+          "hide": false,
+          "instant": false,
+          "legendFormat": "Total",
+          "range": true,
+          "refId": "B"
         }
       ],
-      "title": "Total Incoming RPS",
+      "title": "Total Outgoing RPS",
       "type": "timeseries"
     },
     {
@@ -381,15 +515,40 @@
             ]
           }
         },
-        "overrides": []
+        "overrides": [
+          {
+            "__systemRef": "hideSeriesFrom",
+            "matcher": {
+              "id": "byNames",
+              "options": {
+                "mode": "exclude",
+                "names": [
+                  "p75"
+                ],
+                "prefix": "All except:",
+                "readOnly": true
+              }
+            },
+            "properties": [
+              {
+                "id": "custom.hideFrom",
+                "value": {
+                  "legend": false,
+                  "tooltip": true,
+                  "viz": true
+                }
+              }
+            ]
+          }
+        ]
       },
       "gridPos": {
-        "h": 8,
-        "w": 24,
-        "x": 0,
+        "h": 9,
+        "w": 13,
+        "x": 11,
         "y": 24
       },
-      "id": 103,
+      "id": 107,
       "options": {
         "legend": {
           "calcs": [],
@@ -407,10 +566,8 @@
       "targets": [
         {
           "editorMode": "code",
-          "exemplar": false,
-          "expr": "rate(payment_external_outgoing_http_requests_total[$window])",
-          "instant": false,
-          "legendFormat": "{{response_code}} - {{response_desc}}",
+          "expr": "histogram_quantile(0.99, sum(rate(outgoing_request_processing_time_bucket[$window])) by (le))",
+          "legendFormat": "p99",
           "range": true,
           "refId": "A"
         },
@@ -420,15 +577,54 @@
             "uid": "PBFA97CFB590B2093"
           },
           "editorMode": "code",
-          "expr": "sum(rate(payment_external_outgoing_http_requests_total[$window]))",
+          "expr": "histogram_quantile(0.95, sum(rate(outgoing_request_processing_time_bucket[$window])) by (le))",
           "hide": false,
           "instant": false,
-          "legendFormat": "Total",
+          "legendFormat": "p95",
           "range": true,
           "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.90, sum(rate(outgoing_request_processing_time_bucket[$window])) by (le))",
+          "hide": false,
+          "instant": false,
+          "legendFormat": "p90",
+          "range": true,
+          "refId": "C"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.75, sum(rate(outgoing_request_processing_time_bucket[$window])) by (le))",
+          "hide": false,
+          "instant": false,
+          "legendFormat": "p75",
+          "range": true,
+          "refId": "D"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.50, sum(rate(outgoing_request_processing_time_bucket[$window])) by (le))",
+          "hide": false,
+          "instant": false,
+          "legendFormat": "p50",
+          "range": true,
+          "refId": "E"
         }
       ],
-      "title": "Total Outgoing RPS",
+      "title": "Outgoing Requests Timings",
       "type": "timeseries"
     },
     {
@@ -437,7 +633,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 32
+        "y": 33
       },
       "id": 27,
       "panels": [],
@@ -504,38 +700,13 @@
             ]
           }
         },
-        "overrides": [
-          {
-            "__systemRef": "hideSeriesFrom",
-            "matcher": {
-              "id": "byNames",
-              "options": {
-                "mode": "exclude",
-                "names": [
-                  "SUCCESS - "
-                ],
-                "prefix": "All except:",
-                "readOnly": true
-              }
-            },
-            "properties": [
-              {
-                "id": "custom.hideFrom",
-                "value": {
-                  "legend": false,
-                  "tooltip": true,
-                  "viz": true
-                }
-              }
-            ]
-          }
-        ]
+        "overrides": []
       },
       "gridPos": {
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 33
+        "y": 34
       },
       "id": 29,
       "options": {
@@ -635,7 +806,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 33
+        "y": 34
       },
       "id": 26,
       "options": {
@@ -736,7 +907,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 41
+        "y": 42
       },
       "id": 28,
       "options": {
@@ -816,7 +987,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 41
+        "y": 42
       },
       "id": 36,
       "options": {
@@ -934,7 +1105,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 49
+        "y": 50
       },
       "id": 37,
       "options": {
@@ -1016,7 +1187,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 49
+        "y": 50
       },
       "id": 31,
       "options": {
@@ -1074,7 +1245,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 57
+        "y": 58
       },
       "id": 10,
       "panels": [],
@@ -1139,7 +1310,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 58
+        "y": 59
       },
       "id": 2,
       "options": {
@@ -1279,7 +1450,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 58
+        "y": 59
       },
       "id": 13,
       "options": {
@@ -1382,7 +1553,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 66
+        "y": 67
       },
       "id": 25,
       "options": {
@@ -1423,7 +1594,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 74
+        "y": 75
       },
       "id": 12,
       "panels": [
@@ -1813,7 +1984,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 75
+        "y": 76
       },
       "id": 17,
       "panels": [],
@@ -1944,7 +2115,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 76
+        "y": 77
       },
       "id": 3,
       "options": {
@@ -2082,7 +2253,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 76
+        "y": 77
       },
       "id": 14,
       "options": {
@@ -2215,6 +2386,30 @@
                 }
               }
             ]
+          },
+          {
+            "__systemRef": "hideSeriesFrom",
+            "matcher": {
+              "id": "byNames",
+              "options": {
+                "mode": "exclude",
+                "names": [
+                  "acc-8 - SUCCESS"
+                ],
+                "prefix": "All except:",
+                "readOnly": true
+              }
+            },
+            "properties": [
+              {
+                "id": "custom.hideFrom",
+                "value": {
+                  "legend": false,
+                  "tooltip": true,
+                  "viz": true
+                }
+              }
+            ]
           }
         ]
       },
@@ -2222,7 +2417,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 84
+        "y": 85
       },
       "id": 32,
       "options": {
@@ -2251,7 +2446,7 @@
           },
           "editorMode": "code",
           "exemplar": true,
-          "expr": "sum by (accountName, outcome) (rate(external_sys_duration_count{service=~\"$service\"}[30s]))",
+          "expr": "rate(external_sys_duration_count{service=~\"$service\"}[$window])",
           "hide": false,
           "interval": "",
           "legendFormat": "{{accountName}} - {{outcome}}",
@@ -2362,7 +2557,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 84
+        "y": 85
       },
       "id": 34,
       "options": {
@@ -2526,7 +2721,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 92
+        "y": 93
       },
       "id": 43,
       "options": {
@@ -2571,7 +2766,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 100
+        "y": 101
       },
       "id": 21,
       "panels": [],
@@ -2643,7 +2838,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 101
+        "y": 102
       },
       "id": 19,
       "options": {
@@ -2743,7 +2938,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 101
+        "y": 102
       },
       "id": 22,
       "options": {
@@ -2843,7 +3038,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 109
+        "y": 110
       },
       "id": 100,
       "options": {
@@ -2884,7 +3079,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 117
+        "y": 118
       },
       "id": 38,
       "panels": [],
@@ -2953,7 +3148,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 118
+        "y": 119
       },
       "id": 40,
       "options": {
@@ -3049,7 +3244,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 118
+        "y": 119
       },
       "id": 39,
       "options": {
@@ -3150,7 +3345,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 126
+        "y": 127
       },
       "id": 95,
       "options": {
@@ -3262,7 +3457,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 126
+        "y": 127
       },
       "id": 42,
       "options": {
@@ -3358,7 +3553,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 134
+        "y": 135
       },
       "id": 41,
       "options": {
@@ -3398,7 +3593,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 142
+        "y": 143
       },
       "id": 97,
       "panels": [],
@@ -3470,7 +3665,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 143
+        "y": 144
       },
       "id": 98,
       "maxDataPoints": 100,
@@ -3574,7 +3769,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 143
+        "y": 144
       },
       "id": 99,
       "maxDataPoints": 100,
@@ -3680,7 +3875,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 151
+        "y": 152
       },
       "id": 24,
       "options": {
@@ -3821,7 +4016,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 159
+        "y": 160
       },
       "id": 4,
       "options": {
@@ -3923,7 +4118,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 159
+        "y": 160
       },
       "id": 96,
       "options": {
@@ -4053,7 +4248,7 @@
             "value": "30m"
           }
         ],
-        "query": "15s, 30s, 1m, 10m, 15m, 30m",
+        "query": "10s, 15s, 30s, 45s, 1m, 10m, 15m, 30m",
         "type": "custom"
       }
     ]
