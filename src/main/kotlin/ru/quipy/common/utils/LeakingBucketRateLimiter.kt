@@ -11,7 +11,7 @@ import java.util.concurrent.Executors
 import java.util.concurrent.LinkedBlockingQueue
 
 class LeakingBucketRateLimiter(
-    private val rate: Long,
+    private val rate: Int,
     private val window: Duration,
     bucketSize: Int,
 ) : RateLimiter {
@@ -25,7 +25,7 @@ class LeakingBucketRateLimiter(
     private val releaseJob = rateLimiterScope.launch {
         while (true) {
             delay(window.toMillis())
-            for (i in 0..rate) {
+            repeat(rate) {
                 queue.poll()
             }
         }

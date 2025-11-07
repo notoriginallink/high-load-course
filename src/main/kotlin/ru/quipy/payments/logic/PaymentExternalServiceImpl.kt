@@ -15,8 +15,6 @@ import ru.quipy.payments.metrics.PaymentMetrics
 import java.net.SocketTimeoutException
 import java.time.Duration
 import java.util.*
-import java.util.concurrent.TimeUnit
-import kotlin.time.toDuration
 
 
 // Advice: always treat time as a Duration
@@ -33,6 +31,8 @@ class PaymentExternalSystemAdapterImpl(
 
         val emptyBody = RequestBody.create(null, ByteArray(0))
         val mapper = ObjectMapper().registerKotlinModule()
+        
+        fun now() = System.currentTimeMillis()
     }
 
     private val serviceName = properties.serviceName
@@ -41,7 +41,7 @@ class PaymentExternalSystemAdapterImpl(
     private val rateLimitPerSec = properties.rateLimitPerSec
     private val parallelRequests = properties.parallelRequests
     private val rateLimiter = SlidingWindowRateLimiter(
-        rate = rateLimitPerSec.toLong(),
+        rate = rateLimitPerSec,
         window = Duration.ofSeconds(1),
     )
     private val ongoingWindow = OngoingWindow(maxWinSize = parallelRequests)
@@ -55,21 +55,22 @@ class PaymentExternalSystemAdapterImpl(
 
         // Вне зависимости от исхода оплаты важно отметить что она была отправлена.
         // Это требуется сделать ВО ВСЕХ СЛУЧАЯХ, поскольку эта информация используется сервисом тестирования.
+        val currentTime = now()
         paymentESService.update(paymentId) {
-            it.logSubmission(success = true, transactionId, now(), Duration.ofMillis(now() - paymentStartedAt))
+            it.logSubmission(success = true, transactionId, currentTime, Duration.ofMillis(currentTime - paymentStartedAt))
         }
 
         logger.info("[$accountName] Submit: $paymentId , txId: $transactionId")
-        if (now() + requestAverageProcessingTime.toMillis() > deadline) {
+        if (currentTime + requestAverageProcessingTime.toMillis() > deadline) {
             paymentESService.update(paymentId) {
-                it.logProcessing(success = false, now(), transactionId = transactionId, reason = "Deadline")
+                it.logProcessing(success = false, currentTime, transactionId = transactionId, reason = "Deadline")
             }
             metrics.incTimeoutPayment(account = accountName)
             return
         }
 
         try {
-            val timeToWait = Duration.ofMillis(deadline - now() - requestAverageProcessingTime.toMillis())
+            val timeToWait = Duration.ofMillis(deadline - currentTime - requestAverageProcessingTime.toMillis())
             if (!ongoingWindow.tryAcquire(timeToWait)) {
                 paymentESService.update(paymentId) {
                     it.logProcessing(success = false, now(), transactionId = transactionId, reason = "Deadline")
@@ -142,5 +143,3 @@ class PaymentExternalSystemAdapterImpl(
     override fun name() = properties.accountName
 
 }
-
-public fun now() = System.currentTimeMillis()
