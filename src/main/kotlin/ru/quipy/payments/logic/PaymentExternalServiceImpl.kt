@@ -33,6 +33,9 @@ class PaymentExternalSystemAdapterImpl(
         val mapper = ObjectMapper().registerKotlinModule()
         
         fun now() = System.currentTimeMillis()
+
+        const val MAX_RETRIES: Int = 3
+        const val RETRY_DELAY_MS: Long = 100
     }
 
     private val serviceName = properties.serviceName
@@ -49,19 +52,16 @@ class PaymentExternalSystemAdapterImpl(
     private val client = OkHttpClient.Builder().build()
 
     override fun performPaymentAsync(paymentId: UUID, amount: Int, paymentStartedAt: Long, deadline: Long) {
-        logger.warn("[$accountName] Submitting payment request for payment $paymentId")
+        logger.info("[$accountName] Submitting payment request for payment $paymentId")
 
         val transactionId = UUID.randomUUID()
-
-        // Вне зависимости от исхода оплаты важно отметить что она была отправлена.
-        // Это требуется сделать ВО ВСЕХ СЛУЧАЯХ, поскольку эта информация используется сервисом тестирования.
         val currentTime = now()
         paymentESService.update(paymentId) {
             it.logSubmission(success = true, transactionId, currentTime, Duration.ofMillis(currentTime - paymentStartedAt))
         }
 
         logger.info("[$accountName] Submit: $paymentId , txId: $transactionId")
-        if (currentTime + requestAverageProcessingTime.toMillis() > deadline) {
+        if (isPaymentExpiredAt(deadline)) {
             paymentESService.update(paymentId) {
                 it.logProcessing(success = false, currentTime, transactionId = transactionId, reason = "Deadline")
             }
@@ -78,36 +78,13 @@ class PaymentExternalSystemAdapterImpl(
                 metrics.incTimeoutPayment(account = accountName)
                 return
             }
-            rateLimiter.tickBlocking()
 
-            val request = Request.Builder().run {
-                url("http://$paymentProviderHostPort/external/process?serviceName=$serviceName&token=$token&accountName=$accountName&transactionId=$transactionId&paymentId=$paymentId&amount=$amount")
-                post(emptyBody)
-            }.build()
-
-            client.newCall(request).execute().use { response ->
-                metrics.incOutgoing(
-                    account = accountName,
-                    responseCode = response.code.toString(),
-                    responseDesc = response.message,
-                )
-                val body = try {
-                    mapper.readValue(response.body?.string(), ExternalSysResponse::class.java)
-                } catch (e: Exception) {
-                    logger.error("[$accountName] [ERROR] Payment processed for txId: $transactionId, payment: $paymentId, result code: ${response.code}, reason: ${response.body?.string()}")
-                    metrics.incFailedPayment(account = accountName)
-                    ExternalSysResponse(transactionId.toString(), paymentId.toString(),false, e.message)
-                }
-
-                logger.info("[$accountName] Payment processed for txId: $transactionId, payment: $paymentId, succeeded: ${body.result}, message: ${body.message}")
-
-                // Здесь мы обновляем состояние оплаты в зависимости от результата в базе данных оплат.
-                // Это требуется сделать ВО ВСЕХ ИСХОДАХ (успешная оплата / неуспешная / ошибочная ситуация)
-                if (body.result) metrics.incSuccessPayment(account = accountName) else metrics.incFailedPayment(account = accountName)
-                paymentESService.update(paymentId) {
-                    it.logProcessing(body.result, now(), transactionId, reason = body.message)
-                }
-            }
+            performExternalRequest(
+                paymentId = paymentId,
+                amount = amount,
+                transactionId = transactionId,
+                deadline = deadline,
+            )
         } catch (e: Exception) {
             when (e) {
                 is SocketTimeoutException -> {
@@ -135,6 +112,80 @@ class PaymentExternalSystemAdapterImpl(
             ongoingWindow.release()
         }
     }
+
+    private fun performExternalRequest(
+        paymentId: UUID,
+        amount: Int,
+        transactionId: UUID,
+        deadline: Long,
+        attempt: Int = 0
+    ) {
+        rateLimiter.tickBlocking()
+
+        if (isPaymentExpiredAt(deadline)) {
+            paymentESService.update(paymentId) {
+                it.logProcessing(success = false, now(), transactionId = transactionId, reason = "Deadline")
+            }
+            metrics.incTimeoutPayment(account = accountName)
+            return
+        }
+
+        val request = Request.Builder().run {
+            url("http://$paymentProviderHostPort/external/process?serviceName=$serviceName&token=$token&accountName=$accountName&transactionId=$transactionId&paymentId=$paymentId&amount=$amount")
+            post(emptyBody)
+        }.build()
+
+        val response = client.newCall(request).execute().use { response ->
+            metrics.incOutgoing(
+                account = accountName,
+                responseCode = response.code.toString(),
+                responseDesc = response.message,
+            )
+            return@use try {
+                mapper.readValue(response.body?.string(), ExternalSysResponse::class.java)
+            } catch (e: Exception) {
+                logger.error("[$accountName] [ERROR] Payment processed for txId: $transactionId, payment: $paymentId, result code: ${response.code}, reason: ${response.body?.string()}")
+                metrics.incFailedPayment(account = accountName)
+                ExternalSysResponse(transactionId.toString(), paymentId.toString(),false, e.message)
+            }
+        }
+
+        logger.info("[$accountName] Payment processed for txId: $transactionId, payment: $paymentId, succeeded: ${response.result}, message: ${response.message}")
+
+        when {
+            response.isSuccessful() -> metrics.incSuccessPayment(account = accountName)
+            response.isRetryable() && attempt <= MAX_RETRIES -> {
+                metrics.incFailedRetryablePayment(account = accountName)
+                val nextDelay = RETRY_DELAY_MS * (attempt + 1)
+                if (isPaymentExpiredAt(now() + nextDelay)) {
+                    paymentESService.update(paymentId) {
+                        it.logProcessing(success = false, now(), transactionId = transactionId, reason = "Deadline")
+                    }
+                    metrics.incTimeoutPayment(account = accountName)
+                    return
+                }
+                Thread.sleep(nextDelay)
+                performExternalRequest(
+                    paymentId = paymentId,
+                    amount = amount,
+                    transactionId = transactionId,
+                    deadline = deadline,
+                    attempt = attempt + 1,
+                )
+            }
+            else -> metrics.incFailedPayment(account = accountName)
+        }
+
+        paymentESService.update(paymentId) {
+            it.logProcessing(response.result, now(), transactionId, reason = response.message)
+        }
+    }
+
+    private fun ExternalSysResponse.isSuccessful(): Boolean = this.result
+
+    private fun ExternalSysResponse.isRetryable(): Boolean = this.message == "Temporary error"
+
+    private fun isPaymentExpiredAt(deadline: Long): Boolean = now() - requestAverageProcessingTime.toMillis() > deadline
 
     override fun price() = properties.price
 

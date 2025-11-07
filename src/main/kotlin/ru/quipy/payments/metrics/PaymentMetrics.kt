@@ -13,6 +13,7 @@ class PaymentMetrics(
         const val SUCCESS_PAYMENT_TAG = "success"
         const val FAILED_PAYMENT_TAG = "failed"
         const val TIMEOUT_PAYMENT_TAG = "timeout"
+        const val FAILED_RETRIABLE_PAYMENT_TAG = "failed_retryable"
     }
 
     fun incIncomingTotal(url: String, httpStatus: HttpStatus = HttpStatus.OK) = Counter
@@ -53,6 +54,8 @@ class PaymentMetrics(
     fun incTimeoutPayment(account: String) = incPaymentsCount(account, TIMEOUT_PAYMENT_TAG)
 
     fun incFailedPayment(account: String) = incPaymentsCount(account, FAILED_PAYMENT_TAG)
+
+    fun incFailedRetryablePayment(account: String) = incPaymentsCount(account, FAILED_RETRIABLE_PAYMENT_TAG)
 
     private fun incPaymentsCount(account: String, status: String) = Counter
         .builder("payments_count")
