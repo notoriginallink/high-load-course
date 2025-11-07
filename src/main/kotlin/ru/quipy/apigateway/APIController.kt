@@ -1,18 +1,19 @@
 package ru.quipy.apigateway
 
-import org.slf4j.Logger
-import org.slf4j.LoggerFactory
-import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.http.HttpStatus
 import org.springframework.http.ResponseEntity
 import org.springframework.web.bind.annotation.*
+import ru.quipy.common.utils.LeakingBucketRateLimiter
 import ru.quipy.common.utils.SlidingWindowRateLimiter
+import ru.quipy.common.utils.TokenBucketRateLimiter
 import ru.quipy.orders.repository.OrderRepository
 import ru.quipy.payments.logic.OrderPayer
 import ru.quipy.payments.logic.PaymentAccountProperties
+import ru.quipy.payments.logic.PaymentExternalSystemAdapterImpl.Companion.now
 import ru.quipy.payments.metrics.PaymentMetrics
 import java.time.Duration
 import java.util.*
+import java.util.concurrent.TimeUnit
 
 @RestController
 class APIController(
@@ -22,10 +23,23 @@ class APIController(
     paymentAccountProperties: List<PaymentAccountProperties>,
 ) {
 
-    private val logger: Logger = LoggerFactory.getLogger(APIController::class.java)
-    private val paymentRateLimiter: SlidingWindowRateLimiter = SlidingWindowRateLimiter(
-        rate = paymentAccountProperties.maxOf(PaymentAccountProperties::rateLimitPerSec).toLong(),
+    val maxRateLimitPerSec: Int = paymentAccountProperties.maxOf(PaymentAccountProperties::rateLimitPerSec)
+//    private val paymentRateLimiter: SlidingWindowRateLimiter = SlidingWindowRateLimiter(
+//        rate = maxRateLimitPerSec,
+//        window = Duration.ofSeconds(1),
+//    )
+
+//    private val paymentRateLimiter = TokenBucketRateLimiter(
+//        rate = maxRateLimitPerSec,
+//        bucketMaxCapacity = 130,
+//        window = 1,
+//        timeUnit = TimeUnit.SECONDS,
+//    )
+
+    private val paymentRateLimiter = LeakingBucketRateLimiter(
+        rate = maxRateLimitPerSec,
         window = Duration.ofSeconds(1),
+        bucketSize = 275,
     )
 
     @PostMapping("/users")
@@ -67,8 +81,8 @@ class APIController(
 
     @PostMapping("/orders/{orderId}/payment")
     fun payOrder(@PathVariable orderId: UUID, @RequestParam deadline: Long): ResponseEntity<Any> {
-        metrics.incIncomingTotal(url = "/orders/{orderId}/payment")
         if (!paymentRateLimiter.tick()) {
+            metrics.incIncomingTotal("/orders/{orderId}/payment", HttpStatus.TOO_MANY_REQUESTS)
             return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
                 .body(mapOf("error" to "Rate limit exceeded", "retryAfter" to "1s"))
         }
@@ -77,10 +91,13 @@ class APIController(
         val order = orderRepository.findById(orderId)?.let {
             orderRepository.save(it.copy(status = OrderStatus.PAYMENT_IN_PROGRESS))
             it
-        } ?: throw IllegalArgumentException("No such order $orderId")
-
+        } ?: run {
+            metrics.incIncomingTotal("/orders/{orderId}/payment", HttpStatus.NOT_FOUND)
+            throw IllegalArgumentException("No such order $orderId")
+        }
 
         val createdAt = orderPayer.processPayment(orderId, order.price, paymentId, deadline)
+        metrics.incIncomingTotal("/orders/{orderId}/payment")
         return ResponseEntity.ok(PaymentSubmissionDto(createdAt, paymentId))
     }
 
