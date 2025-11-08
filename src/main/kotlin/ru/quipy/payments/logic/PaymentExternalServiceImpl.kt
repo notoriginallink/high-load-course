@@ -152,6 +152,7 @@ class PaymentExternalSystemAdapterImpl(
             paymentESService.update(paymentId) {
                 it.logProcessing(false, now(), transactionId, reason = "Request timeout.")
             }
+            metrics.incFailedRetryablePayment(account = accountName)
             if (attempt <= MAX_RETRIES) {
                 val nextDelay = RETRY_DELAY_MS * (attempt + 1)
                 if (isPaymentExpiredAt(now() + nextDelay)) {
