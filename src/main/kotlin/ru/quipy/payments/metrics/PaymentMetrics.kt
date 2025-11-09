@@ -1,7 +1,9 @@
 package ru.quipy.payments.metrics
 
 import io.micrometer.core.instrument.Counter
+import io.micrometer.core.instrument.DistributionSummary
 import io.micrometer.core.instrument.MeterRegistry
+import io.prometheus.metrics.core.metrics.Summary
 import org.springframework.http.HttpStatus
 import org.springframework.stereotype.Service
 
@@ -15,6 +17,13 @@ class PaymentMetrics(
         const val TIMEOUT_PAYMENT_TAG = "timeout"
         const val FAILED_RETRIABLE_PAYMENT_TAG = "failed_retryable"
     }
+
+    private val outgoingRequestProcessingTime = DistributionSummary
+        .builder("outgoing_request_processing_time")
+        .description("Outgoing request latency")
+        .publishPercentiles(0.5, 0.75, 0.9, 0.95, 0.99)
+        .publishPercentileHistogram()
+        .register(meterRegistry)
 
     fun incIncomingTotal(url: String, httpStatus: HttpStatus = HttpStatus.OK) = Counter
         .builder("incoming_http_requests")
@@ -48,6 +57,8 @@ class PaymentMetrics(
         )
         .register(meterRegistry)
         .increment()
+
+    fun recordOutgoingRequest(processingTime: Long) = outgoingRequestProcessingTime.record(processingTime.toDouble())
 
     fun incSuccessPayment(account: String) = incPaymentsCount(account, SUCCESS_PAYMENT_TAG)
 

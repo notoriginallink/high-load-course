@@ -12,9 +12,11 @@ import ru.quipy.common.utils.SlidingWindowRateLimiter
 import ru.quipy.core.EventSourcingService
 import ru.quipy.payments.api.PaymentAggregate
 import ru.quipy.payments.metrics.PaymentMetrics
+import java.io.InterruptedIOException
 import java.net.SocketTimeoutException
 import java.time.Duration
 import java.util.*
+import java.util.concurrent.TimeUnit
 
 
 // Advice: always treat time as a Duration
@@ -49,7 +51,9 @@ class PaymentExternalSystemAdapterImpl(
     )
     private val ongoingWindow = OngoingWindow(maxWinSize = parallelRequests)
 
-    private val client = OkHttpClient.Builder().build()
+    private val client = OkHttpClient.Builder()
+        .callTimeout(1500, TimeUnit.MILLISECONDS)
+        .build()
 
     override fun performPaymentAsync(paymentId: UUID, amount: Int, paymentStartedAt: Long, deadline: Long) {
         logger.info("[$accountName] Submitting payment request for payment $paymentId")
@@ -69,48 +73,23 @@ class PaymentExternalSystemAdapterImpl(
             return
         }
 
-        try {
-            val timeToWait = Duration.ofMillis(deadline - currentTime - requestAverageProcessingTime.toMillis())
-            if (!ongoingWindow.tryAcquire(timeToWait)) {
-                paymentESService.update(paymentId) {
-                    it.logProcessing(success = false, now(), transactionId = transactionId, reason = "Deadline")
-                }
-                metrics.incTimeoutPayment(account = accountName)
-                return
+        val timeToWait = Duration.ofMillis(deadline - currentTime - requestAverageProcessingTime.toMillis())
+        if (!ongoingWindow.tryAcquire(timeToWait)) {
+            paymentESService.update(paymentId) {
+                it.logProcessing(success = false, now(), transactionId = transactionId, reason = "Deadline")
             }
-
-            performExternalRequest(
-                paymentId = paymentId,
-                amount = amount,
-                transactionId = transactionId,
-                deadline = deadline,
-            )
-        } catch (e: Exception) {
-            when (e) {
-                is SocketTimeoutException -> {
-                    metrics.incOutgoing(
-                        account = accountName,
-                        responseCode = HttpStatus.REQUEST_TIMEOUT.value().toString(),
-                        responseDesc = HttpStatus.REQUEST_TIMEOUT.reasonPhrase,
-                    )
-                    logger.error("[$accountName] Payment timeout for txId: $transactionId, payment: $paymentId", e)
-                    metrics.incTimeoutPayment(account = accountName)
-                    paymentESService.update(paymentId) {
-                        it.logProcessing(false, now(), transactionId, reason = "Request timeout.")
-                    }
-                }
-
-                else -> {
-                    logger.error("[$accountName] Payment failed for txId: $transactionId, payment: $paymentId", e)
-                    metrics.incFailedPayment(account = accountName)
-                    paymentESService.update(paymentId) {
-                        it.logProcessing(false, now(), transactionId, reason = e.message)
-                    }
-                }
-            }
-        } finally {
-            ongoingWindow.release()
+            metrics.incTimeoutPayment(account = accountName)
+            return
         }
+
+        performExternalRequest(
+            paymentId = paymentId,
+            amount = amount,
+            transactionId = transactionId,
+            deadline = deadline,
+        )
+
+        ongoingWindow.release()
     }
 
     private fun performExternalRequest(
@@ -135,19 +114,70 @@ class PaymentExternalSystemAdapterImpl(
             post(emptyBody)
         }.build()
 
-        val response = client.newCall(request).execute().use { response ->
+        val startTime = now()
+        val response = try {
+            client.newCall(request).execute().use { response ->
+                metrics.recordOutgoingRequest(now() - startTime)
+                metrics.incOutgoing(
+                    account = accountName,
+                    responseCode = response.code.toString(),
+                    responseDesc = response.message,
+                )
+                return@use try {
+                    mapper.readValue(response.body?.string(), ExternalSysResponse::class.java)
+                } catch (e: Exception) {
+                    logger.error("[$accountName] [ERROR] Payment processed for txId: $transactionId, payment: $paymentId, result code: ${response.code}, reason: ${response.body?.string()}")
+                    metrics.incFailedPayment(account = accountName)
+                    ExternalSysResponse(transactionId.toString(), paymentId.toString(),false, e.message)
+                }
+            }
+        } catch (e : SocketTimeoutException) {
             metrics.incOutgoing(
                 account = accountName,
-                responseCode = response.code.toString(),
-                responseDesc = response.message,
+                responseCode = HttpStatus.REQUEST_TIMEOUT.value().toString(),
+                responseDesc = HttpStatus.REQUEST_TIMEOUT.reasonPhrase,
             )
-            return@use try {
-                mapper.readValue(response.body?.string(), ExternalSysResponse::class.java)
-            } catch (e: Exception) {
-                logger.error("[$accountName] [ERROR] Payment processed for txId: $transactionId, payment: $paymentId, result code: ${response.code}, reason: ${response.body?.string()}")
-                metrics.incFailedPayment(account = accountName)
-                ExternalSysResponse(transactionId.toString(), paymentId.toString(),false, e.message)
+            logger.warn("[$accountName] Payment timeout for txId: $transactionId, payment: $paymentId", e)
+            paymentESService.update(paymentId) {
+                it.logProcessing(false, now(), transactionId, reason = "Request timeout.")
             }
+            return
+        } catch (e : InterruptedIOException) {
+            metrics.incOutgoing(
+                account = accountName,
+                responseCode = HttpStatus.REQUEST_TIMEOUT.value().toString(),
+                responseDesc = HttpStatus.REQUEST_TIMEOUT.reasonPhrase,
+            )
+            logger.warn("[$accountName] Payment timeout for txId: $transactionId, payment: $paymentId", e)
+            paymentESService.update(paymentId) {
+                it.logProcessing(false, now(), transactionId, reason = "Request timeout.")
+            }
+            metrics.incFailedRetryablePayment(account = accountName)
+            if (attempt <= MAX_RETRIES) {
+                val nextDelay = RETRY_DELAY_MS * (attempt + 1)
+                if (isPaymentExpiredAt(now() + nextDelay)) {
+                    paymentESService.update(paymentId) {
+                        it.logProcessing(success = false, now(), transactionId = transactionId, reason = "Deadline")
+                    }
+                    metrics.incTimeoutPayment(account = accountName)
+                    return
+                }
+                return performExternalRequest(
+                    paymentId = paymentId,
+                    amount = amount,
+                    transactionId = transactionId,
+                    deadline = deadline,
+                    attempt = attempt + 1,
+                )
+            }
+            return
+        } catch (e : Exception) {
+            logger.error("[$accountName] Payment failed for txId: $transactionId, payment: $paymentId", e)
+            metrics.incFailedPayment(account = accountName)
+            paymentESService.update(paymentId) {
+                it.logProcessing(false, now(), transactionId, reason = e.message)
+            }
+            return
         }
 
         logger.info("[$accountName] Payment processed for txId: $transactionId, payment: $paymentId, succeeded: ${response.result}, message: ${response.message}")
