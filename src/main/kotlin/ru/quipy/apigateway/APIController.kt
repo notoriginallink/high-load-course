@@ -4,46 +4,37 @@ import org.springframework.http.HttpStatus
 import org.springframework.http.ResponseEntity
 import org.springframework.web.bind.annotation.*
 import ru.quipy.common.utils.LeakingBucketRateLimiter
-import ru.quipy.common.utils.SlidingWindowRateLimiter
-import ru.quipy.common.utils.TokenBucketRateLimiter
 import ru.quipy.orders.repository.OrderRepository
 import ru.quipy.payments.logic.OrderPayer
 import ru.quipy.payments.logic.PaymentAccountProperties
-import ru.quipy.payments.logic.PaymentExternalSystemAdapterImpl.Companion.now
 import ru.quipy.payments.metrics.PaymentMetrics
+import ru.quipy.payments.metrics.ThreadPoolMetrics
 import java.time.Duration
 import java.util.*
-import java.util.concurrent.TimeUnit
+import java.util.concurrent.RejectedExecutionException
 
 @RestController
 class APIController(
     private val orderRepository: OrderRepository,
     private val orderPayer: OrderPayer,
     private val metrics: PaymentMetrics,
+    private val threadPoolMetrics: ThreadPoolMetrics,
     paymentAccountProperties: List<PaymentAccountProperties>,
 ) {
 
     val maxRateLimitPerSec: Int = paymentAccountProperties.maxOf(PaymentAccountProperties::rateLimitPerSec)
-//    private val paymentRateLimiter: SlidingWindowRateLimiter = SlidingWindowRateLimiter(
-//        rate = maxRateLimitPerSec,
-//        window = Duration.ofSeconds(1),
-//    )
-
-//    private val paymentRateLimiter = TokenBucketRateLimiter(
-//        rate = maxRateLimitPerSec,
-//        bucketMaxCapacity = 130,
-//        window = 1,
-//        timeUnit = TimeUnit.SECONDS,
-//    )
 
     private val paymentRateLimiter = LeakingBucketRateLimiter(
         rate = maxRateLimitPerSec,
         window = Duration.ofSeconds(1),
-        bucketSize = 275,
+
+        // (processingTime - averageProcessingTime) * rateLimitPerSec
+        bucketSize = ((26.0 - 0.5) * maxRateLimitPerSec).toInt(),
     )
 
     @PostMapping("/users")
     fun createUser(@RequestBody req: CreateUserRequest): User {
+
         metrics.incIncomingTotal(url = "/users")
         return User(UUID.randomUUID(), req.name)
     }
@@ -96,9 +87,14 @@ class APIController(
             throw IllegalArgumentException("No such order $orderId")
         }
 
-        val createdAt = orderPayer.processPayment(orderId, order.price, paymentId, deadline)
-        metrics.incIncomingTotal("/orders/{orderId}/payment")
-        return ResponseEntity.ok(PaymentSubmissionDto(createdAt, paymentId))
+        try {
+            val createdAt = orderPayer.processPayment(orderId, order.price, paymentId, deadline)
+            metrics.incIncomingTotal("/orders/{orderId}/payment")
+            return ResponseEntity.ok(PaymentSubmissionDto(createdAt, paymentId))
+        } catch (_ : RejectedExecutionException) {
+            threadPoolMetrics.incRejectedCount("payment-submission-executor")
+            return ResponseEntity.internalServerError().build()
+        }
     }
 
     class PaymentSubmissionDto(
