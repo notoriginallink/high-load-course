@@ -2,7 +2,6 @@ package ru.quipy.payments.logic
 
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
-import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.stereotype.Service
 import ru.quipy.common.utils.CallerBlockingRejectedExecutionHandler
 import ru.quipy.common.utils.NamedThreadFactory
@@ -22,14 +21,17 @@ class OrderPayer(
     private val logger: Logger = LoggerFactory.getLogger(javaClass)
 
     private val paymentExecutor = ThreadPoolExecutor(
-        16,
-        16,
-        0L,
-        TimeUnit.MILLISECONDS,
-        LinkedBlockingQueue(8_000),
-        NamedThreadFactory("payment-submission-executor"),
-        CallerBlockingRejectedExecutionHandler()
+        50,                                                     // corePoolSize
+        50,                                                     // maximumPoolSize
+        1000,                                                   // keepAliveTime
+        TimeUnit.MILLISECONDS,                                  // unit
+        LinkedBlockingQueue(8_000),                             // workQueue
+        NamedThreadFactory("payment-submission-executor"),      // threadFactory
+        CallerBlockingRejectedExecutionHandler()                // handler
     )
+
+    val currentQueueSize: Int
+        get() = paymentExecutor.queue.size
 
     fun processPayment(orderId: UUID, amount: Int, paymentId: UUID, deadline: Long): Long {
         val createdAt = System.currentTimeMillis()
