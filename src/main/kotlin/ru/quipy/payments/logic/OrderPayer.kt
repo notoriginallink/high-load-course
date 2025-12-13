@@ -3,13 +3,15 @@ package ru.quipy.payments.logic
 import kotlinx.coroutines.*
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
+import org.springframework.context.annotation.Lazy
 import org.springframework.stereotype.Service
+import ru.quipy.common.utils.CallerBlockingRejectedExecutionHandler
 import ru.quipy.common.utils.NamedThreadFactory
 import ru.quipy.core.EventSourcingService
 import ru.quipy.payments.api.PaymentAggregate
+import ru.quipy.payments.metrics.ThreadPoolMetrics
 import java.util.*
-import java.util.concurrent.Executors
-import java.util.concurrent.SynchronousQueue
+import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
 
@@ -17,42 +19,35 @@ import java.util.concurrent.TimeUnit
 class OrderPayer(
     private val paymentESService: EventSourcingService<UUID, PaymentAggregate, PaymentAggregateState>,
     private val paymentService: PaymentService,
+    @param:Lazy private val threadPoolMetrics: ThreadPoolMetrics,
 ) {
 
     private val logger: Logger = LoggerFactory.getLogger(javaClass)
 
-    // Используем SynchronousQueue для полностью неблокирующей работы
-    // При превышении лимита потоков будет бросаться RejectedExecutionException
-    // Это обрабатывается в APIController
     private val paymentExecutor = ThreadPoolExecutor(
         100,                                                    // corePoolSize
-        500,                                                    // maximumPoolSize
-        70L,                                                    // keepAliveTime
+        1200,                                                    // maximumPoolSize
+        70,                                                    // keepAliveTime
         TimeUnit.SECONDS,                                       // unit
-        SynchronousQueue(),                                     // workQueue - неблокирующая очередь
+        LinkedBlockingQueue(20_000),                            // workQueue - неблокирующая очередь
         NamedThreadFactory("payment-submission-executor"),      // threadFactory
-        ThreadPoolExecutor.AbortPolicy()                        // handler - неблокирующая политика
+        CallerBlockingRejectedExecutionHandler(threadPoolMetrics,  "payment-submission-executor")
     )
-
-    private val coroutineScope = CoroutineScope(paymentExecutor.asCoroutineDispatcher())
-
-    private val blockingExecutor = Executors.newFixedThreadPool(128)
-    private val blockingDispatcher = blockingExecutor.asCoroutineDispatcher()
 
     val currentQueueSize: Int
         get() = paymentExecutor.queue.size
 
-    fun processPayment(orderId: UUID, amount: Int, paymentId: UUID, deadline: Long): Long {
+    val executorScope = CoroutineScope(paymentExecutor.asCoroutineDispatcher())
+
+    suspend fun processPayment(orderId: UUID, amount: Int, paymentId: UUID, deadline: Long): Long {
         val createdAt = System.currentTimeMillis()
-        coroutineScope.launch {
-            val createdEvent = withContext(blockingDispatcher) {
-                paymentESService.create {
-                    it.create(
-                        id = paymentId,
-                        orderId = orderId,
-                        amount = amount,
-                    )
-                }
+        executorScope.launch {
+            val createdEvent = paymentESService.create {
+                it.create(
+                    id = paymentId,
+                    orderId = orderId,
+                    amount = amount,
+                )
             }
             logger.trace("Payment ${createdEvent.paymentId} for order $orderId created.")
 

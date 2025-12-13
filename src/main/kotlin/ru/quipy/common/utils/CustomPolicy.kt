@@ -1,6 +1,7 @@
 package ru.quipy.common.utils
 
 import org.slf4j.LoggerFactory
+import ru.quipy.payments.metrics.ThreadPoolMetrics
 import java.time.Duration
 import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.RejectedExecutionHandler
@@ -8,6 +9,8 @@ import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
 
 class CallerBlockingRejectedExecutionHandler(
+    private val threadPoolMetrics: ThreadPoolMetrics,
+    private val name: String,
     private val maxWait: Duration = Duration.ofMinutes(30),
 ) : RejectedExecutionHandler {
     companion object {
@@ -16,6 +19,7 @@ class CallerBlockingRejectedExecutionHandler(
 
     // Even if event is rejected we will still keep it, trying to put in queue so that not to lose it!
     override fun rejectedExecution(r: Runnable, executor: ThreadPoolExecutor) {
+        threadPoolMetrics.incRejectedCount(executorName = name)
         if (!executor.isShutdown) {
             try {
                 val queue = executor.queue
