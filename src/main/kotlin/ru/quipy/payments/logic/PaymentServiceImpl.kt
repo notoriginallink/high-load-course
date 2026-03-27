@@ -1,5 +1,8 @@
 package ru.quipy.payments.logic
 
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Service
 import ru.quipy.payments.metrics.PaymentMetrics
@@ -16,9 +19,13 @@ class PaymentSystemImpl(
     }
 
     override suspend fun submitPaymentRequest(paymentId: UUID, amount: Int, paymentStartedAt: Long, deadline: Long) {
-        for (account in paymentAccounts) {
-            account.performPaymentAsync(paymentId, amount, paymentStartedAt, deadline)
-            metrics.incIncoming(account.name())
+        coroutineScope {
+            paymentAccounts.map { account ->
+                async {
+                    account.performPaymentAsync(paymentId, amount, paymentStartedAt, deadline)
+                    metrics.incIncoming(account.name())
+                }
+            }.awaitAll()
         }
     }
 }

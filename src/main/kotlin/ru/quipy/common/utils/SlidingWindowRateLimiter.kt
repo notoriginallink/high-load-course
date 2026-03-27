@@ -4,6 +4,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 import java.time.Duration
@@ -35,9 +36,9 @@ class SlidingWindowRateLimiter(
         }
     }
 
-    fun tickBlocking() {
+    fun tickBlocking() = runBlocking {
         while (!tick()) {
-            Thread.sleep(10)
+            delay(10)
         }
     }
 

@@ -141,10 +141,24 @@ fun makeRateLimiter(accountName: String, rate: Int, timeUnit: TimeUnit = TimeUni
     val config = RateLimiterConfig.custom()
         .limitRefreshPeriod(if (timeUnit == TimeUnit.SECONDS) Duration.ofSeconds(1) else Duration.ofMinutes(1))
         .limitForPeriod(rate)
-        .timeoutDuration(Duration.ofMillis(5))
+        .timeoutDuration(Duration.ofSeconds(1))
         .build()
 
     val rateLimiterRegistry = RateLimiterRegistry.of(config)
 
     return rateLimiterRegistry.rateLimiter("rateLimiter:${accountName}")
+}
+
+suspend fun io.github.resilience4j.ratelimiter.RateLimiter.awaitPermission() {
+    while (true) {
+        val waitNanos = reservePermission()
+        when {
+            waitNanos > 0L -> {
+                delay(TimeUnit.NANOSECONDS.toMillis(waitNanos).coerceAtLeast(1L))
+                return
+            }
+            waitNanos == 0L -> return
+            else -> delay(1L)
+        }
+    }
 }
