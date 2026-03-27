@@ -11,8 +11,6 @@ import org.springframework.http.HttpMethod
 import org.springframework.http.HttpStatus
 import ru.quipy.common.utils.NonBlockingOngoingWindow
 import ru.quipy.common.utils.SlidingWindowRateLimiter
-import ru.quipy.common.utils.awaitPermission
-import ru.quipy.common.utils.makeRateLimiter
 import ru.quipy.core.EventSourcingService
 import ru.quipy.payments.api.PaymentAggregate
 import ru.quipy.payments.metrics.PaymentMetrics
