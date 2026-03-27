@@ -30,8 +30,8 @@ class OrderPayer(
 
     private val paymentExecutor = ThreadPoolExecutor(
         100,                                                    // corePoolSize
-        1200,                                                    // maximumPoolSize
-        70,                                                    // keepAliveTime
+        200,                                                    // maximumPoolSize
+        0,                                                      // keepAliveTime
         TimeUnit.SECONDS,                                       // unit
         LinkedBlockingQueue(20_000),                            // workQueue - неблокирующая очередь
         NamedThreadFactory("payment-submission-executor"),      // threadFactory

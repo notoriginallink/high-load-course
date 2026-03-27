@@ -6,6 +6,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.future.await
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import org.slf4j.LoggerFactory
 import org.springframework.http.HttpMethod
 import org.springframework.http.HttpStatus
@@ -20,6 +21,7 @@ import java.net.http.HttpRequest
 import java.net.http.HttpResponse
 import java.time.Duration
 import java.util.*
+import java.util.concurrent.CompletableFuture
 import java.util.concurrent.Executors
 
 
@@ -44,15 +46,18 @@ class PaymentExternalSystemAdapterImpl(
     private val requestAverageProcessingTime = properties.averageProcessingTime
     private val rateLimitPerSec = properties.rateLimitPerSec
     private val parallelRequests = properties.parallelRequests
+    private val timeout = Duration.ofMillis(1000)
+    private val hedgedRequests = 3
+    private val hedgedTimeout = Duration.ofMillis(100)
     private val rateLimiter = SlidingWindowRateLimiter(
         rate = rateLimitPerSec,
         window = Duration.ofSeconds(1),
     )
     private val ongoingWindow = NonBlockingOngoingWindow(maxWinSize = parallelRequests)
-    private val httpExecutor = Executors.newFixedThreadPool(150)
+    private val httpExecutor = Executors.newFixedThreadPool(300)
 
     private val client = HttpClient.newBuilder()
-        .connectTimeout(Duration.ofSeconds(1))
+        .connectTimeout(timeout)
         .version(HttpClient.Version.HTTP_2)
         .executor(httpExecutor)
         .build()
@@ -112,15 +117,17 @@ class PaymentExternalSystemAdapterImpl(
             }
 
             val uri = URI.create("http://$paymentProviderHostPort/external/process?serviceName=$serviceName&token=$token&accountName=$accountName&transactionId=$transactionId&paymentId=$paymentId&amount=$amount")
+            val idempotencyToken = transactionId.toString()
             val request = HttpRequest.newBuilder()
                 .uri(uri)
-                .timeout(Duration.ofSeconds(1))
+                .timeout(timeout)
+                .header("x-idempotency-key", idempotencyToken)
                 .method(HttpMethod.POST.name(), HttpRequest.BodyPublishers.noBody())
                 .build()
 
             val startTime = now()
             val httpResponse = try {
-                client.sendAsync(request, HttpResponse.BodyHandlers.ofString()).await()
+                sendHedgedHttpResponse(request)
             } catch (e: Exception) {
                 logger.error("[$accountName] Payment failed for txId: $transactionId, payment: $paymentId", e)
                 metrics.incFailedPayment(account = accountName)
@@ -162,6 +169,48 @@ class PaymentExternalSystemAdapterImpl(
             }
         } finally {
             ongoingWindow.releaseWindow()
+        }
+    }
+
+    private suspend fun sendHedgedHttpResponse(request: HttpRequest): HttpResponse<String> {
+        val hedgeDelayMs = hedgedTimeout.toMillis()
+        val maxAttempts = hedgedRequests.coerceAtLeast(1)
+        val futures = mutableListOf<CompletableFuture<HttpResponse<String>>>()
+        futures.add(client.sendAsync(request, HttpResponse.BodyHandlers.ofString()))
+
+        repeat(maxAttempts - 1) {
+            val first = withTimeoutOrNull(hedgeDelayMs) {
+                awaitFirstCompletedHttpResponse(futures)
+            }
+            if (first != null) {
+                cancelIncompleteFutures(futures)
+                return first
+            }
+            futures.add(client.sendAsync(request, HttpResponse.BodyHandlers.ofString()))
+        }
+
+        val winner = awaitFirstCompletedHttpResponse(futures)
+        cancelIncompleteFutures(futures)
+        return winner
+    }
+
+    private suspend fun awaitFirstCompletedHttpResponse(
+        futures: List<CompletableFuture<HttpResponse<String>>>,
+    ): HttpResponse<String> {
+        val pending = futures.filter { !it.isDone }
+        if (pending.isEmpty()) {
+            val done = futures.first { it.isDone }
+            return done.get()
+        }
+        @Suppress("UNCHECKED_CAST")
+        return CompletableFuture.anyOf(*pending.toTypedArray()).await() as HttpResponse<String>
+    }
+
+    private fun cancelIncompleteFutures(futures: List<CompletableFuture<HttpResponse<String>>>) {
+        for (f in futures) {
+            if (!f.isDone) {
+                f.cancel(true)
+            }
         }
     }
 
