@@ -1,0 +1,33 @@
+# Условия теста
+```json
+{
+    "ratePerSecond": 4000,
+    "testCount": 1500000,
+    "processingTimeMillis": 1000
+}
+```
+---
+```json
+{
+    "Аккаунт": "acc-13",
+    "parallelRequests": 2000, 
+    "rateLimitPerSec": 5000,
+    "averageProcessingTime": "PT0.01S"
+}
+```
+
+## Изначальные условия и анализ
+![tests](tests_before.png)
+Все тесты пофейлились или упали с ошибкой, много ошибок связанных с request timeout.
+
+## Решение
+Попробовал перевести базу данных да асинхронное взаимодействие - но это не помогло, все равно было куча ошибок
+
+Попробовал убрать взаимодейстие с базой (отправка событий), и без нее все тесты прошли.
+![general](general_after.png)
+![tests](tests_after.png)
+![rps](rps_after.png)
+
+
+
+

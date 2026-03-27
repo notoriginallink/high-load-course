@@ -136,15 +136,3 @@ class CountingRateLimiter(
         var permits: Int = 0,
     )
 }
-
-fun makeRateLimiter(accountName: String, rate: Int, timeUnit: TimeUnit = TimeUnit.SECONDS): io.github.resilience4j.ratelimiter.RateLimiter {
-    val config = RateLimiterConfig.custom()
-        .limitRefreshPeriod(if (timeUnit == TimeUnit.SECONDS) Duration.ofSeconds(1) else Duration.ofMinutes(1))
-        .limitForPeriod(rate)
-        .timeoutDuration(Duration.ofMillis(5))
-        .build()
-
-    val rateLimiterRegistry = RateLimiterRegistry.of(config)
-
-    return rateLimiterRegistry.rateLimiter("rateLimiter:${accountName}")
-}

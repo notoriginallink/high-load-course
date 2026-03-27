@@ -56,13 +56,13 @@ class PaymentAccountsConfig {
     @Bean
     fun accountAdapters(
         paymentAccountProperties: List<PaymentAccountProperties>,
-        paymentService: EventSourcingService<UUID, PaymentAggregate, PaymentAggregateState>,
+//        paymentService: EventSourcingService<UUID, PaymentAggregate, PaymentAggregateState>,
         paymentMetrics: PaymentMetrics,
     ): List<PaymentExternalSystemAdapter> {
         return paymentAccountProperties.map {
             PaymentExternalSystemAdapterImpl(
                 properties = it,
-                paymentESService = paymentService,
+//                paymentESService = paymentService,
                 paymentProviderHostPort = paymentProviderHostPort,
                 token = token,
                 metrics = paymentMetrics,
