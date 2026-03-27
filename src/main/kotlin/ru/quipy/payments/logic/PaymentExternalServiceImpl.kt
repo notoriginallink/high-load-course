@@ -26,7 +26,7 @@ import java.util.concurrent.Executors
 // Advice: always treat time as a Duration
 class PaymentExternalSystemAdapterImpl(
     private val properties: PaymentAccountProperties,
-//    private val paymentESService: EventSourcingService<UUID, PaymentAggregate, PaymentAggregateState>,
+    private val paymentESService: EventSourcingService<UUID, PaymentAggregate, PaymentAggregateState>,
     private val paymentProviderHostPort: String,
     private val token: String,
     private val metrics: PaymentMetrics,
@@ -44,7 +44,6 @@ class PaymentExternalSystemAdapterImpl(
     private val requestAverageProcessingTime = properties.averageProcessingTime
     private val rateLimitPerSec = properties.rateLimitPerSec
     private val parallelRequests = properties.parallelRequests
-//    private val rateLimiter = makeRateLimiter(accountName, rateLimitPerSec)
     private val rateLimiter = SlidingWindowRateLimiter(
         rate = rateLimitPerSec,
         window = Duration.ofSeconds(1),
@@ -63,19 +62,19 @@ class PaymentExternalSystemAdapterImpl(
 
         val transactionId = UUID.randomUUID()
         val currentTime = now()
-//        withContext(Dispatchers.IO) {
-//            paymentESService.update(paymentId) {
-//                it.logSubmission(success = true, transactionId, currentTime, Duration.ofMillis(currentTime - paymentStartedAt))
-//            }
-//        }
+        withContext(Dispatchers.IO) {
+            paymentESService.update(paymentId) {
+                it.logSubmission(success = true, transactionId, currentTime, Duration.ofMillis(currentTime - paymentStartedAt))
+            }
+        }
 
         logger.info("[$accountName] Submit: $paymentId , txId: $transactionId")
         if (isPaymentExpiredAt(deadline)) {
-//            withContext(Dispatchers.IO) {
-//                paymentESService.update(paymentId) {
-//                    it.logProcessing(success = false, currentTime, transactionId = transactionId, reason = "Deadline")
-//                }
-//            }
+            withContext(Dispatchers.IO) {
+                paymentESService.update(paymentId) {
+                    it.logProcessing(success = false, currentTime, transactionId = transactionId, reason = "Deadline")
+                }
+            }
             metrics.incTimeoutPayment(account = accountName)
             return
         }
@@ -103,11 +102,11 @@ class PaymentExternalSystemAdapterImpl(
             rateLimiter.tickBlocking()
 
             if (isPaymentExpiredAt(deadline)) {
-//                withContext(Dispatchers.IO) {
-//                    paymentESService.update(paymentId) {
-//                        it.logProcessing(success = false, now(), transactionId = transactionId, reason = "Deadline")
-//                    }
-//                }
+                withContext(Dispatchers.IO) {
+                    paymentESService.update(paymentId) {
+                        it.logProcessing(success = false, now(), transactionId = transactionId, reason = "Deadline")
+                    }
+                }
                 metrics.incTimeoutPayment(account = accountName)
                 return
             }
@@ -125,11 +124,11 @@ class PaymentExternalSystemAdapterImpl(
             } catch (e: Exception) {
                 logger.error("[$accountName] Payment failed for txId: $transactionId, payment: $paymentId", e)
                 metrics.incFailedPayment(account = accountName)
-//                withContext(Dispatchers.IO) {
-//                    paymentESService.update(paymentId) {
-//                        it.logProcessing(false, now(), transactionId, reason = e.message)
-//                    }
-//                }
+                withContext(Dispatchers.IO) {
+                    paymentESService.update(paymentId) {
+                        it.logProcessing(false, now(), transactionId, reason = e.message)
+                    }
+                }
                 return
             }
 
@@ -156,11 +155,11 @@ class PaymentExternalSystemAdapterImpl(
                 else -> metrics.incFailedPayment(account = accountName)
             }
 
-//            withContext(Dispatchers.IO) {
-//                paymentESService.update(paymentId) {
-//                    it.logProcessing(response.result, now(), transactionId, reason = response.message)
-//                }
-//            }
+            withContext(Dispatchers.IO) {
+                paymentESService.update(paymentId) {
+                    it.logProcessing(response.result, now(), transactionId, reason = response.message)
+                }
+            }
         } finally {
             ongoingWindow.releaseWindow()
         }
